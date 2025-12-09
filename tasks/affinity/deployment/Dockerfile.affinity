@@ -1,0 +1,19 @@
+# Use shared base image directly (contains webserver, workflows, config, and all dependencies)
+FROM us-docker.pkg.dev/toxindex/toxindex-backend/basegpu:latest
+
+# Core workflow files
+COPY affinity/affinity/ /app/affinity/affinity/
+COPY affinity/pyproject.toml /app/affinity/pyproject.toml
+COPY affinity/README.md /app/affinity/README.md
+
+USER root
+# Copy ANTIPASTI checkpoint to accessible location (best model: highest epoch with standard config)
+# RUN cp /app/affinity/resource/ANTIPASTI/checkpoints/full_ags_all_modes/model_epochs_1075_modes_all_pool_1_filters_4_size_4.pt /app/affinity/antipasti_checkpoint.pt
+
+RUN pip install ./affinity/
+
+# Switch back to app user to match base image
+USER app
+
+# Entrypoint: Celery worker for affinity tasks
+CMD ["python", "-m", "celery", "-A", "affinity.celery_worker_affinity", "worker", "--loglevel=info", "-Q", "affinity"]

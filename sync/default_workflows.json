@@ -1,0 +1,147 @@
+{
+    "_doc": {
+      "frontend_id": "Used by frontend to select/workflow; not used by backend router",
+      "title": "Display title (frontend)",
+      "label": "Short label (frontend)",
+      "description": "User-facing description (frontend)",
+      "initial_prompt": "Initial prompt shown in UI (frontend)",
+      "celery_task": "Logical workflow key; also used to build default task_name if task_name is not provided (backend task_router)",
+      "task_name": "Optional explicit Celery task dotted path (e.g., workflows.raptool_task.raptool_task). If omitted, router derives workflows.{celery_task}.{celery_task}",
+      "queue": "Optional Celery queue to send the task to. If omitted, router lets Celery route per task declaration",
+      "notes": "Free-form notes for maintainers; ignored by code"
+    },
+    "workflows": [
+      {
+        "workflow_id": 1,
+        "frontend_id": "toxindex-rap",
+        "title": "toxindex-rap",
+        "label": "ToxIndex RAP",
+        "description": "Retrieval-augmented agent for evidence-backed chemical toxicity assessment.",
+        "initial_prompt": "Is gentamicin nephrotoxic?",
+        "celery_task": "rap_task",
+        "task_name": "workflows.rap.rap_task",
+        "queue": "rap",
+        "notes": "basic workflow"
+      },
+      {
+        "workflow_id": 2,
+        "frontend_id": "toxindex-vanilla",
+        "title": "toxindex-vanilla",
+        "label": "ToxIndex Vanilla",
+        "description": "Direct OpenAI LLM answer (no schema, no retrieval).",
+        "initial_prompt": "Enter your toxicology question.",
+        "celery_task": "plain_openai_task",
+        "task_name": "workflows.plain_openai_tasks.plain_openai_task",
+        "queue": "openai",
+        "notes": "Runs on OpenAI worker queue"
+      },
+      {
+        "workflow_id": 3,
+        "frontend_id": "toxindex-json",
+        "title": "toxindex-json",
+        "label": "ToxIndex JSON",
+        "description": "OpenAI LLM answer formatted as JSON schema.",
+        "initial_prompt": "Enter your toxicology question.",
+        "celery_task": "openai_json_schema_task",
+        "task_name": "workflows.plain_openai_tasks.openai_json_schema_task",
+        "queue": "openai",
+        "notes": "Runs on OpenAI worker queue"
+      },
+      {
+        "workflow_id": 4,
+        "frontend_id": "toxindex-heatmap",
+        "title": "toxindex-heatmap",
+        "label": "heatmap",
+        "description": "Combines insights from prediction, metabolism and pathway analysis to provide a comprehensive toxicological assessment of chemical compounds.",
+        "initial_prompt": "what chemical are you interested in?",
+        "celery_task": "raptool_task",
+        "task_name": "workflows.raptool_task.raptool_task",
+        "queue": "raptool",
+        "notes": "Processed by RAPtool worker pod built from Dockerfile.raptool; main backend does not import RAPtool"
+      },
+      {
+        "workflow_id": 5,
+        "frontend_id": "toxindex-pathway",
+        "title": "toxindex-pathway",
+        "label": "Pathway Analysis",
+        "description": "Analyze and visualize pathway data using WikiPathways and Cytoscape integration.",
+        "initial_prompt": "Enter pathway ID (e.g., WP3657) or upload data file",
+        "celery_task": "pathway_analysis_task",
+        "task_name": "workflows.pathway_analysis_task.pathway_analysis_task",
+        "queue": "pathway",
+        "notes": "Sent to dedicated 'pathway' Celery queue/pod"
+      },
+      {
+        "workflow_id": 6,
+        "frontend_id": "toxindex-smiles",
+        "title": "toxindex-smiles",
+        "label": "SMILES Extraction",
+        "description": "Extract SMILES from uploaded files.",
+        "initial_prompt": "Upload a file containing chemical structures.",
+        "celery_task": "extract_smiles_task",
+        "task_name": "workflows.celery_task_simple_template.extract_smiles_task",
+        "queue": "celery",
+        "notes": "Runs on default/celery queue"
+      },
+      {
+        "workflow_id": 7,
+        "frontend_id": "toxindex-ranking",
+        "title": "toxindex-ranking",
+        "label": "Hazard Ranking",
+        "description": "Workflow that ranks chemicals based on user-specified endpoints",
+        "initial_prompt": "Upload a text file of of InChI's and an endpoint to be ranked by",
+        "celery_task": "ranking_task",
+        "task_name": "workflows.celery_task_ranking.ranking_task", 
+        "queue": "ranking",
+        "notes": "Add task_name/queue when task is implemented"
+      },
+      {
+        "workflow_id": 8,
+        "frontend_id": "toxindex-sygma",
+        "title": "toxindex-sygma",
+        "label": "sygma",
+        "description": "Workflow that ranks chemicals based on user-specified endpoints",
+        "initial_prompt": "Upload a text file of of InChI's and an endpoint to be ranked by",
+        "celery_task": "sygma",
+        "task_name": "workflows.metabolite_sygma_task.metabolite_sygma_task", 
+        "queue": "sygma",
+        "notes": "Add task_name/queue when task is implemented"
+      },
+      {
+        "workflow_id": 9,
+        "frontend_id": "SPARQL",
+        "title": "SPARQL",
+        "label": "SPARQL",
+        "description": "Workflow that fetches chemicals from SPARQL endpoint",
+        "initial_prompt": "Fetch 200 chemicals from SPARQL endpoint",
+        "celery_task": "SPARQL",
+        "task_name": "workflows.celery_task_sparql.sparql_task", 
+        "queue": "SPARQL",
+        "notes": "Add task_name/queue when task is implemented"
+      },
+      {
+        "workflow_id":10,
+        "frontend_id": "buildKE",
+        "title": "buildKE",
+        "label": "buildKE",
+        "description": "extract key events from a pdf",
+        "initial_prompt": "extract key events from a pdf",
+        "celery_task": "build_KE_celery",
+        "task_name": "build_KE.build_KE_celery.build_KE", 
+        "queue": "build_KE",
+        "notes": "Add task_name/queue when task is implemented"
+      },
+      {
+        "workflow_id": 11,
+        "frontend_id": "affinity",
+        "title": "affinity",
+        "label": "Binding Affinity",
+        "description": "Calculate binding free energy (ΔG) for protein complexes using MM/GBSA",
+        "initial_prompt": "Upload PDB complex files and metadata to calculate binding affinity",
+        "celery_task": "affinity_celery",
+        "task_name": "affinity.affinity_celery.affinity",
+        "queue": "affinity",
+        "notes": "MM/GBSA binding affinity calculation with GPU support (OpenCL)"
+      }
+    ]
+  }

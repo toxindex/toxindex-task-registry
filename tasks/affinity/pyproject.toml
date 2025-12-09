@@ -1,0 +1,71 @@
+[project]
+name = "binding-affinity-workflow"
+version = "0.1.0"
+description = "Automated workflow for calculating binding affinity for ligand variants"
+readme = "README.md"
+requires-python = ">=3.9,<3.13"
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0,<2.0.0",  # NumPy 1.x for compatibility (RDKit optional dependency also requires 1.x)
+    "pyyaml>=6.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "scikit-learn>=1.3.0",  # For QSAR/ML models
+    "joblib>=1.3.0",  # For model serialization
+    "requests>=2.31.0",  # For protein PDB download
+    "biopython>=1.81",
+    "openmm",
+    "pdbfixer @ git+https://github.com/openmm/pdbfixer.git",
+    "google-generativeai>=0.8.0",
+    "tabulate>=0.9.0",
+    "antipasti",
+    "langchain-google-vertexai>=2.1.2",
+    "torch>=2.0.0",  # Required for ANTIPASTI (with CUDA support if GPU available)
+]
+
+[project.optional-dependencies]
+rdkit = [
+    "rdkit-pypi>=2022.9.5",  # Required for small molecule workflows (not needed for antibody/Celery workflow)
+]
+gnina = [
+    "meeko>=0.7.0",  # For converting molecules to PDBQT format for AutoDock Vina/GNINA
+    "gemmi>=0.6.0",  # Required by Meeko for structure handling
+]
+deepchem = [
+    "deepchem>=2.7.0",  # Optional: Pre-trained molecular property models
+]
+chemprop = [
+    "chemprop>=1.6.0",  # Optional: Popular molecular property prediction
+    "torch>=2.0.0",  # Required by chemprop
+]
+dev = [
+    "pytest>=7.4.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["utils", "affinity"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py312']
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+

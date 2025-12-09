@@ -1,0 +1,16 @@
+[project]
+name = "sync-scripts"
+version = "0.1.0"
+description = "Scripts for syncing workflows and database operations"
+requires-python = ">=3.9"
+dependencies = [
+    "psycopg2-binary>=2.9.0",  # PostgreSQL adapter for Python
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+

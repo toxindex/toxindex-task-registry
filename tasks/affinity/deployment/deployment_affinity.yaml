@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker-affinity
+  namespace: toxindex-app
+spec:
+  replicas: 3  # Multiple replicas for parallel processing via Celery groups
+  selector:
+    matchLabels:
+      app: celery-worker-affinity
+  template:
+    metadata:
+      labels:
+        app: celery-worker-affinity
+    spec:
+      serviceAccountName: toxindex-app-sa
+      # Node selector for GPU type (required for Autopilot to provision correct GPU)
+      # Autopilot will automatically create GPU nodes when this pod is scheduled
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-l4
+        # Request latest driver (580.x) which supports CUDA 12.8+
+        # Options: "latest" (580.x, CUDA 12.8+), "default" (535.x, CUDA 12.2)
+        # Note: Must be lowercase "latest" not "LATEST"
+        cloud.google.com/gke-gpu-driver-version: "latest"
+      containers:
+      - name: celery-worker-affinity
+        image: us-docker.pkg.dev/toxindex/toxindex-backend/affinity:latest
+        command: ["python", "-m", "celery", "-A", "affinity.celery_worker_affinity", "worker", "--loglevel=info", "-Q", "affinity"]
+        envFrom:
+        - secretRef:
+            name: backend-secrets
+        env:
+        - name: REDIS_HOST
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: REDIS_PORT
+        # OpenMM platform selection (OpenCL for GPU, CPU as fallback)
+        - name: OPENMM_PLATFORM
+          value: "CUDA"  # Use OpenCL for GPU acceleration, fallback to CPU if unavailable
+        # Ensure OpenMM finds CUDA plugins and driver libs
+        - name: OPENMM_PLUGIN_DIR
+          value: "/opt/conda/envs/affinity/lib/plugins"
+        - name: LD_LIBRARY_PATH
+          value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
+        resources:
+          requests:
+            memory: "8Gi"
+            cpu: "4000m"
+            nvidia.com/gpu: 1  # Request 1 GPU
+

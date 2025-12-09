@@ -1,0 +1,43 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: celery-worker-affinity-hpa
+  namespace: toxindex-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: celery-worker-affinity
+  minReplicas: 1
+  maxReplicas: 50  # Scale up to 50 pods based on demand (limited by GPU node availability)
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 50
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60  # Wait 1 min before scaling down pods (faster cost savings)
+      policies:
+      - type: Percent
+        value: 50  # Scale down by 50% at a time
+        periodSeconds: 10  # Check every 30 seconds (faster response)
+    scaleUp:
+      stabilizationWindowSeconds: 0  # Scale up immediately when needed
+      policies:
+      - type: Percent
+        value: 100  # Double capacity when scaling up
+        periodSeconds: 10
+      - type: Pods
+        value: 2  # Or add 2 pods at a time
+        periodSeconds: 10
+      selectPolicy: Max  # Use the more aggressive scaling policy
+
