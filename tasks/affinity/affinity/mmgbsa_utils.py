@@ -239,28 +239,31 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
                        platform_name: Optional[str] = None, temperature: float = BODY_TEMPERATURE) -> Dict:
     """
     Run baseline MM/GBSA calculation (single-trajectory method).
-    
+
+    This method is DETERMINISTIC - it uses VerletIntegrator (no stochastic terms)
+    and only performs energy minimization, not MD simulation.
+
     MM/GBSA calculates an approximation of binding free energy (ΔG) as:
     ΔG_bind ≈ E_complex - (E_receptor + E_ligand)
-    
+
     Where E includes:
     - Molecular mechanics energy (bonded + non-bonded interactions)
     - Solvation free energy (GB model for polar, SASA for non-polar)
     - NOTE: Entropy term (-TΔS) is typically NOT included in this calculation
-    
+
     The Kd is then derived from ΔG using: Kd = exp(-ΔG / (RT))
-    
+
     IMPORTANT LIMITATIONS:
     - The calculated ΔG is an approximation that may miss entropic contributions
     - The conversion to Kd assumes ΔG is a true standard Gibbs free energy (ΔG°)
     - MM/GBSA ΔG values are often used for relative ranking rather than absolute Kd prediction
     - Temperature significantly affects Kd: ~2-3x change per 10°C
-    
+
     Args:
-        temperature: Temperature in Kelvin for MD simulation and Kd conversion.
+        temperature: Temperature in Kelvin for Kd conversion.
                      Use BODY_TEMPERATURE (310.15 K) for human drug screening,
                      ROOM_TEMPERATURE (298.15 K) for laboratory comparisons.
-    
+
     Returns:
         Dict with 'dg_bind' (kcal/mol) and 'kd_nm' (nM) keys.
         Note: kd_nm is derived from ΔG and should be interpreted with caution.
@@ -301,8 +304,9 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
                                      constraints=constraints)
     
     # 3. Minimize Complex
-    # Use specified temperature for MD simulation (consistent with Kd conversion)
-    integrator = openmm.LangevinIntegrator(temperature*unit.kelvin, 1.0/unit.picosecond, 2.0*unit.femtoseconds)
+    # Use VerletIntegrator for deterministic behavior (no stochastic terms)
+    # Langevin integrator is unnecessary since we only do minimization, not MD
+    integrator = openmm.VerletIntegrator(2.0*unit.femtoseconds)
     
     try:
         platform = openmm.Platform.getPlatformByName(platform_name)
@@ -346,7 +350,8 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
         sub_system = forcefield.createSystem(sub_modeller.topology,
                                              nonbondedMethod=app.NoCutoff,
                                              constraints=app.HBonds)
-        sub_integrator = openmm.LangevinIntegrator(temperature*unit.kelvin, 1.0/unit.picosecond, 2.0*unit.femtoseconds)
+        # Use VerletIntegrator for deterministic single-point energy calculation
+        sub_integrator = openmm.VerletIntegrator(2.0*unit.femtoseconds)
         
         try:
             platform = openmm.Platform.getPlatformByName(platform_name)
@@ -673,14 +678,17 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
                                   platform_name: Optional[str] = None, temperature: float = ROOM_TEMPERATURE) -> Dict:
     """
     Run variable dielectric MM/GBSA calculation.
-    
+
+    This method is DETERMINISTIC - it uses VerletIntegrator (no stochastic terms)
+    and only performs energy minimization, not MD simulation.
+
     Uses higher internal dielectric (4.0) as approximation for variable dielectric effect.
-    
+
     Args:
-        temperature: Temperature in Kelvin for MD simulation and Kd conversion.
+        temperature: Temperature in Kelvin for Kd conversion.
                      Use BODY_TEMPERATURE (310.15 K) for human drug screening,
                      ROOM_TEMPERATURE (298.15 K) for laboratory comparisons.
-    
+
     Returns:
         Dict with 'dg_bind' (kcal/mol) and 'kd_nm' (nM) keys.
     """
@@ -724,8 +732,9 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
             if isinstance(force, openmm.GBSAOBCForce):
                 force.setSoluteDielectric(4.0)  # Higher internal dielectric
                 print(f"  {name}: Set solute dielectric to 4.0")
-        
-        integrator = openmm.LangevinIntegrator(temperature*unit.kelvin, 1.0/unit.picosecond, 2.0*unit.femtoseconds)
+
+        # Use VerletIntegrator for deterministic behavior (no stochastic terms)
+        integrator = openmm.VerletIntegrator(2.0*unit.femtoseconds)
         try:
             platform = openmm.Platform.getPlatformByName(platform_name)
             sim = app.Simulation(modeller_obj.topology, system, integrator, platform)
