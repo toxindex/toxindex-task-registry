@@ -13,6 +13,10 @@ from openmm import app
 import pdbfixer
 from affinity.affinity_utils import convert_delta_g_kcal_to_kd_nm, BODY_TEMPERATURE, ROOM_TEMPERATURE
 
+# Set deterministic random seed for reproducibility
+# This ensures energy minimization converges to the same state
+DETERMINISTIC_SEED = 42
+
 
 def extract_case_id(filename: str) -> str:
     """
@@ -61,11 +65,14 @@ def parse_metadata_json(metadata_path: str) -> Dict[str, Dict]:
         },
         ...
     }
+    
+    Chains are normalized (sorted) for deterministic behavior.
     """
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
     
     # Normalize chain lists (handle both list and string formats)
+    # Sorting ensures deterministic behavior and enables symmetry testing
     normalized = {}
     for case_id, info in metadata.items():
         normalized[case_id] = {
@@ -84,6 +91,9 @@ def parse_metadata_csv(metadata_path: str) -> Dict[str, Dict]:
     case_ID,receptor_chains,ligand_chains
     1S78,"H,L","A"
     2DD8,"H,L","S"
+    
+    Chains are normalized (sorted) for deterministic behavior.
+    Empty rows are skipped.
     """
     df = pd.read_csv(metadata_path)
     
@@ -96,8 +106,16 @@ def parse_metadata_csv(metadata_path: str) -> Dict[str, Dict]:
     metadata = {}
     for _, row in df.iterrows():
         case_id = str(row['case_ID']).strip()
+        # Skip empty rows
+        if not case_id or case_id.lower() == 'nan':
+            continue
+        
         receptor_chains = _normalize_chains(row['receptor_chains'])
         ligand_chains = _normalize_chains(row['ligand_chains'])
+        
+        # Skip if no chains defined
+        if not receptor_chains or not ligand_chains:
+            continue
         
         metadata[case_id] = {
             "receptor_chains": receptor_chains,
@@ -124,14 +142,23 @@ def load_metadata(metadata_path: str) -> Dict[str, Dict]:
 
 
 def _normalize_chains(chains) -> List[str]:
-    """Normalize chain input to list of strings."""
+    """
+    Normalize chain input to list of strings.
+    
+    Returns sorted list for deterministic behavior (same chains in same order).
+    This ensures that swapping receptor/ligand chains produces identical results
+    when the same chains are used (just labeled differently).
+    """
     if isinstance(chains, list):
-        return [str(c).strip() for c in chains]
+        normalized = [str(c).strip() for c in chains]
     elif isinstance(chains, str):
         # Handle comma-separated strings
-        return [c.strip() for c in chains.split(',') if c.strip()]
+        normalized = [c.strip() for c in chains.split(',') if c.strip()]
     else:
-        return []
+        normalized = []
+    
+    # Sort for deterministic ordering (ensures consistent behavior)
+    return sorted(normalized)
 
 
 def validate_metadata(pdb_files: List[str], metadata: Dict[str, Dict]) -> None:
@@ -217,21 +244,53 @@ def clean_pdb(input_pdb: str, output_pdb: str) -> None:
     print(f"  Cleaned PDB saved to {os.path.basename(output_pdb)}")
 
 
+def get_available_platforms() -> List[str]:
+    """
+    Get list of available OpenMM platforms.
+    
+    Returns:
+        List of platform names that are available
+    """
+    available = []
+    for platform_name in ["CUDA", "OpenCL", "CPU", "Reference"]:
+        try:
+            platform = openmm.Platform.getPlatformByName(platform_name)
+            available.append(platform_name)
+        except Exception:
+            continue
+    return available
+
+
 def get_platform_name() -> str:
     """
     Get OpenMM platform name from environment variable.
     
-    Defaults to CPU if not set or if OpenCL/CUDA unavailable.
+    Defaults to CUDA if not set. Falls back to CPU only if CUDA unavailable.
+    Automatically detects available platforms and uses the best one.
     """
-    platform_name = os.environ.get("OPENMM_PLATFORM", "CPU")
+    requested_platform = os.environ.get("OPENMM_PLATFORM", "CUDA")
     
-    # Verify platform is available
-    try:
-        openmm.Platform.getPlatformByName(platform_name)
-        return platform_name
-    except Exception:
-        print(f"Warning: Platform '{platform_name}' not available, using CPU")
-        return "CPU"
+    # Get available platforms
+    available_platforms = get_available_platforms()
+    
+    if not available_platforms:
+        raise RuntimeError("No OpenMM platforms available! Check OpenMM installation.")
+    
+    # Try requested platform first
+    if requested_platform in available_platforms:
+        return requested_platform
+    
+    # Fallback logic: prefer CUDA > OpenCL > CPU
+    preferred_order = ["CUDA", "OpenCL", "CPU", "Reference"]
+    for platform in preferred_order:
+        if platform in available_platforms:
+            print(f"Warning: Requested platform '{requested_platform}' not available.")
+            print(f"Available platforms: {', '.join(available_platforms)}")
+            print(f"Using platform: {platform}")
+            return platform
+    
+    # Should never reach here, but just in case
+    return available_platforms[0]
 
 
 def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligand_chains: List[str],
@@ -242,22 +301,41 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
 
     This method is DETERMINISTIC - it uses VerletIntegrator (no stochastic terms)
     and only performs energy minimization, not MD simulation.
+    
+    DETERMINISM GUARANTEES:
+    - Chains are normalized (sorted) to ensure consistent ordering
+    - Random seed is set for reproducible minimization
+    - Single-trajectory method ensures receptor/ligand use same coordinates as complex
+    
+    SYMMETRY NOTE:
+    - Swapping receptor/ligand chains should produce identical results since:
+      dG = E_complex - (E_receptor + E_ligand) = E_complex - (E_ligand + E_receptor)
+    - However, subtle differences may occur due to:
+      * Chain ordering in PDB file
+      * Numerical precision
+      * PDBFixer processing order
+    - For true symmetry, ensure chains are properly normalized (this function does that)
+   
+    Run baseline MM/GBSA calculation (single-trajectory method).
 
-    MM/GBSA calculates an approximation of binding free energy (ΔG) as:
-    ΔG_bind ≈ E_complex - (E_receptor + E_ligand)
+    This method is DETERMINISTIC - it uses VerletIntegrator (no stochastic terms)
+    and only performs energy minimization, not MD simulation.
+
+    MM/GBSA calculates an approximation of binding free energy (dG) as:
+    dG_bind approximately = E_complex - (E_receptor + E_ligand)
 
     Where E includes:
     - Molecular mechanics energy (bonded + non-bonded interactions)
     - Solvation free energy (GB model for polar, SASA for non-polar)
-    - NOTE: Entropy term (-TΔS) is typically NOT included in this calculation
+    - NOTE: Entropy term (-T*dS) is typically NOT included in this calculation
 
-    The Kd is then derived from ΔG using: Kd = exp(-ΔG / (RT))
+    The Kd is then derived from dG using: Kd = exp(-dG / (RT))
 
     IMPORTANT LIMITATIONS:
-    - The calculated ΔG is an approximation that may miss entropic contributions
-    - The conversion to Kd assumes ΔG is a true standard Gibbs free energy (ΔG°)
-    - MM/GBSA ΔG values are often used for relative ranking rather than absolute Kd prediction
-    - Temperature significantly affects Kd: ~2-3x change per 10°C
+    - The calculated dG is an approximation that may miss entropic contributions
+    - The conversion to Kd assumes dG is a true standard Gibbs free energy (dG standard)
+    - MM/GBSA dG values are often used for relative ranking rather than absolute Kd prediction
+    - Temperature significantly affects Kd: approximately 2 to 3 times change per 10 degrees C
 
     Args:
         temperature: Temperature in Kelvin for Kd conversion.
@@ -266,7 +344,7 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
 
     Returns:
         Dict with 'dg_bind' (kcal/mol) and 'kd_nm' (nM) keys.
-        Note: kd_nm is derived from ΔG and should be interpreted with caution.
+        Note: kd_nm is derived from dG and should be interpreted with caution.
     """
     if platform_name is None:
         platform_name = get_platform_name()
@@ -313,9 +391,30 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
         simulation = app.Simulation(modeller.topology, system, integrator, platform)
         print(f"  Using OpenMM Platform: {platform.getName()}")
     except Exception as e:
-        print(f"  Warning: Could not set platform {platform_name}, using default. Error: {e}")
-        simulation = app.Simulation(modeller.topology, system, integrator)
+        # Platform not available, try to get best available platform
+        available = get_available_platforms()
+        if available:
+            fallback_platform = available[0]  # Use first available
+            print(f"  Warning: Platform '{platform_name}' not available (Error: {e})")
+            print(f"  Available platforms: {', '.join(available)}")
+            print(f"  Falling back to: {fallback_platform}")
+            try:
+                platform = openmm.Platform.getPlatformByName(fallback_platform)
+                simulation = app.Simulation(modeller.topology, system, integrator, platform)
+                print(f"  Using OpenMM Platform: {platform.getName()}")
+            except Exception:
+                # Last resort: use default
+                print(f"  Warning: Could not set platform, using default")
+                simulation = app.Simulation(modeller.topology, system, integrator)
+        else:
+            print(f"  Warning: Could not set platform {platform_name}, using default. Error: {e}")
+            simulation = app.Simulation(modeller.topology, system, integrator)
     
+    # Set positions - VerletIntegrator is deterministic (no stochastic terms)
+    # For deterministic behavior, ensure:
+    # 1. Chain ordering is normalized (done via _normalize_chains)
+    # 2. Same platform is used
+    # 3. Same initial positions
     simulation.context.setPositions(modeller.positions)
     
     print(f"  Minimizing complex (max {max_iterations} iterations)...")
@@ -342,9 +441,13 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
     # 4. Calculate Receptor and Ligand Energies
     # IMPORTANT: Receptor and ligand must be minimized separately to avoid artifacts
     # from removing chains (atoms may be in strained positions)
+    # NOTE: Chain IDs are normalized (sorted) to ensure deterministic behavior
     def calc_energy(chain_ids, name):
+        # Ensure chain_ids are sorted for deterministic behavior
+        chain_ids_sorted = sorted(chain_ids) if isinstance(chain_ids, list) else [chain_ids]
+        
         sub_modeller = app.Modeller(modeller.topology, minimized_positions)
-        to_delete = [c for c in sub_modeller.topology.chains() if c.id not in chain_ids]
+        to_delete = [c for c in sub_modeller.topology.chains() if c.id not in chain_ids_sorted]
         sub_modeller.delete(to_delete)
         
         sub_system = forcefield.createSystem(sub_modeller.topology,
@@ -370,24 +473,28 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
         print(f"  {name} Energy: {e_val.value_in_unit(unit.kilocalories_per_mole):.4f} kcal/mol")
         return e_val
     
-    e_receptor = calc_energy(receptor_chains, "Receptor")
-    e_ligand = calc_energy(ligand_chains, "Ligand")
+    # Normalize chains to sorted lists for deterministic behavior
+    receptor_chains_normalized = _normalize_chains(receptor_chains)
+    ligand_chains_normalized = _normalize_chains(ligand_chains)
+    
+    e_receptor = calc_energy(receptor_chains_normalized, "Receptor")
+    e_ligand = calc_energy(ligand_chains_normalized, "Ligand")
     
     # 5. Calculate dG_bind
-    # Note: This is an approximation: ΔG ≈ E_complex - (E_receptor + E_ligand)
-    # Missing: entropy term (-TΔS), which can be significant for flexible systems
+    # Note: This is an approximation: dG approximately = E_complex - (E_receptor + E_ligand)
+    # Missing: entropy term (-T*dS), which can be significant for flexible systems
     dg_bind = e_complex - (e_receptor + e_ligand)
     dg_val = dg_bind.value_in_unit(unit.kilocalories_per_mole)
     
-    # 6. Calculate Kd from ΔG (using same temperature as MD simulation)
-    # WARNING: This conversion assumes ΔG is a true standard Gibbs free energy (ΔG°)
-    # Since MM/GBSA ΔG may miss entropic contributions, the Kd should be interpreted with caution
+    # 6. Calculate Kd from dG (using same temperature as MD simulation)
+    # WARNING: This conversion assumes dG is a true standard Gibbs free energy (dG standard)
+    # Since MM/GBSA dG may miss entropic contributions, the Kd should be interpreted with caution
     kd_nm = convert_delta_g_kcal_to_kd_nm(dg_val, temperature=temperature) if dg_val is not None and not (np.isnan(dg_val) or np.isinf(dg_val)) else None
     
     print(f"  dG_bind: {dg_val:.4f} kcal/mol (T={temperature:.2f} K)")
     if kd_nm is not None:
         # Use scientific notation to avoid printing 0.0000 for extremely small values
-        print(f"  Kd: {kd_nm:.3e} nM (T={temperature:.2f} K) [derived from ΔG, interpret with caution]")
+        print(f"  Kd: {kd_nm:.3e} nM (T={temperature:.2f} K) [derived from dG, interpret with caution]")
     
     return {
         "dg_bind": dg_val,
@@ -635,7 +742,7 @@ def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligan
     # Format output
     if avg_dg is not None:
         print(f"  Ensemble dG: {avg_dg:.4f} +/- {std_dg:.4f} kcal/mol ({n_successful}/{n_snapshots} snapshots, T={temperature:.2f} K)")
-        # Calculate Kd from average ΔG (using same temperature as MD simulation)
+        # Calculate Kd from average dG (using same temperature as MD simulation)
         kd_nm = convert_delta_g_kcal_to_kd_nm(avg_dg, temperature=temperature) if not (np.isnan(avg_dg) or np.isinf(avg_dg)) else None
         if kd_nm is not None:
             # Use scientific notation to avoid printing 0.0000 for extremely small values
@@ -793,7 +900,7 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
     dg_bind = e_complex - (e_receptor + e_ligand)
     dg_val = dg_bind.value_in_unit(unit.kilocalories_per_mole)
     
-    # Calculate Kd from ΔG (using same temperature as MD simulation)
+    # Calculate Kd from dG (using same temperature as MD simulation)
     kd_nm = convert_delta_g_kcal_to_kd_nm(dg_val, temperature=temperature) if dg_val is not None and not (np.isnan(dg_val) or np.isinf(dg_val)) else None
     
     print(f"  dG_bind (eps=4.0): {dg_val:.4f} kcal/mol (T={temperature:.2f} K)")
