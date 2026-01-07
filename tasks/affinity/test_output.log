@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/kyu_insilica_co/toxindex-task-registry/tasks/affinity/affinity/debugging/affinity_test.py", line 19, in <module>
+    from affinity.mmgbsa_utils import (
+    ...<7 lines>...
+    )
+  File "/home/kyu_insilica_co/toxindex-task-registry/tasks/affinity/affinity/mmgbsa_utils.py", line 17, in <module>
+    import pdbfixer
+ModuleNotFoundError: No module named 'pdbfixer'

@@ -1,4 +1,0 @@
-Case,Method,Original_dG,Swapped_dG,Difference,Relative_Difference,Is_Identical,Original_receptor,Original_ligand,Swapped_receptor,Swapped_ligand
-1S78,baseline,-86.41189370966778,-90.18757238442765,3.775678674759874,0.041864733409897235,False,"['C', 'D']",['A'],['A'],"['C', 'D']"
-2DD8,baseline,-83.235932125872,-84.4768629931127,1.2409308672407064,0.014689594562026741,False,"['H', 'L']",['S'],['S'],"['H', 'L']"
-2FJG,baseline,-94.60846917351162,-90.95022737637989,3.658241797131737,0.03866717038220472,False,"['H', 'L']","['V', 'W']","['V', 'W']","['H', 'L']"

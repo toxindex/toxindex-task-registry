@@ -8,8 +8,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: celery-worker-affinity
-  minReplicas: 1
-  maxReplicas: 50  # Scale up to 50 pods based on demand (limited by GPU node availability)
+  minReplicas: 0  # Allow scale to zero when idle (use KEDA or manual scaling to wake up)
+  maxReplicas: 10  # A100 GPUs are expensive, limit max replicas
   metrics:
   - type: Resource
     resource:

@@ -568,6 +568,13 @@ docker tag taskname:latest us-docker.pkg.dev/toxindex/toxindex-backend/taskname:
 docker push us-docker.pkg.dev/toxindex/toxindex-backend/taskname:latest
 ```
 
+e.g. 
+```bash
+docker build -f affinity/deployment/Dockerfile.affinity -t affinity:latest --load .
+docker tag affinity:latest us-docker.pkg.dev/toxindex/toxindex-backend/affinity:latest
+docker push us-docker.pkg.dev/toxindex/toxindex-backend/affinity:latest
+```
+
 ### Deploying to Kubernetes
 
 ```bash
@@ -576,6 +583,11 @@ kubectl apply -f tasks/taskname/deployment/deployment_taskname.yaml
 
 # Check status
 kubectl get pods -n toxindex-app -l app=celery-worker-taskname
+```
+
+e.g.
+```bash
+kubectl apply -f affinity/deployment/deployment_affinity.yaml --validate=false
 ```
 
 ### Updating Workflows

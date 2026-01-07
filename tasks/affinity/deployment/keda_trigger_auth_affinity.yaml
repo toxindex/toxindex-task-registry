@@ -1,0 +1,24 @@
+# KEDA TriggerAuthentication for Redis
+# Only needed if Redis requires password authentication
+#
+# Usage:
+# 1. Create a secret with Redis password:
+#    kubectl create secret generic keda-redis-secret \
+#      --from-literal=password=YOUR_REDIS_PASSWORD \
+#      -n toxindex-app
+#
+# 2. Apply this TriggerAuthentication:
+#    kubectl apply -f keda_trigger_auth_affinity.yaml
+#
+# 3. Uncomment authenticationRef in keda_scaledobject_affinity.yaml
+
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: keda-redis-auth
+  namespace: toxindex-app
+spec:
+  secretTargetRef:
+  - parameter: password
+    name: keda-redis-secret
+    key: password

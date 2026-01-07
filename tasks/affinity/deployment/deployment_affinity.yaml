@@ -4,7 +4,7 @@ metadata:
   name: celery-worker-affinity
   namespace: toxindex-app
 spec:
-  replicas: 3  # Multiple replicas for parallel processing via Celery groups
+  replicas: 1  # Scale to 0 when idle, scale up when tasks arrive
   selector:
     matchLabels:
       app: celery-worker-affinity
@@ -50,7 +50,11 @@ spec:
           value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
         resources:
           requests:
-            memory: "8Gi"
-            cpu: "4000m"
-            nvidia.com/gpu: 1  # Request 1 GPU
+            memory: "32Gi"
+            cpu: "8000m"
+            nvidia.com/gpu: 1  # Request 1 L4 GPU
+          limits:
+            memory: "64Gi"
+            cpu: "12000m"
+            nvidia.com/gpu: 1
 

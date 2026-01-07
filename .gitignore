@@ -4,3 +4,6 @@ __pycache__/
 *.pyd
 .Python
 
+# Affinity CUDA environment
+tasks/affinity/affinity_cuda_env/
+
