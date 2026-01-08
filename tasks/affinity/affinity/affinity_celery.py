@@ -431,9 +431,18 @@ def generate_comparison_table(results_by_method: dict, groundtruth_df: Optional[
     all_cases = set()
     for df in results_by_method.values():
         all_cases.update(df['Case'].values)
-    
+
     # Don't sort by Case here - we'll sort by ranking at the end
     comparison_df = pd.DataFrame({'Case': list(all_cases)})
+
+    # Extract metadata columns (same for all methods, use first available)
+    metadata_cols = ['receptor_chains', 'ligand_chains', 'num_atoms', 'iterations']
+    for col in metadata_cols:
+        for df in results_by_method.values():
+            if col in df.columns:
+                comparison_df = pd.merge(comparison_df, df[['Case', col]],
+                                        on='Case', how='left')
+                break  # Only need from one method (same for all)
     
     # Add method predictions (both dG and Kd)
     for method_name, df in results_by_method.items():
@@ -480,8 +489,12 @@ def generate_comparison_table(results_by_method: dict, groundtruth_df: Optional[
             lambda x: f"{x:.3e}" if pd.notnull(x) else x
         )
 
-    # Reorder columns: Case, groundtruth (if exists), methods (dG, Kd), rankings
+    # Reorder columns: Case, metadata, groundtruth (if exists), methods (dG, Kd), rankings
     cols = ['Case']
+    # Add metadata columns
+    for col in metadata_cols:
+        if col in comparison_df.columns:
+            cols.append(col)
     if 'groundtruth_dG' in comparison_df.columns:
         cols.append('groundtruth_dG')
     # Add dG columns
@@ -491,7 +504,7 @@ def generate_comparison_table(results_by_method: dict, groundtruth_df: Optional[
             cols.append(f'{m}_Kd_nM')
     # Add rankings
     cols.extend([f'{m}_rank' for m in results_by_method.keys()])
-    
+
     comparison_df = comparison_df[cols]
     
     # Sort by ranking: groundtruth rank if available, otherwise use first method's rank
@@ -576,11 +589,15 @@ def affinity_single_pdb(self, pdb_file_id: str, metadata_dict: dict,
                 temperature=temperature,
                 skip_fixing=False,
             )
-            
+
             return {
                 "Case": case_id,
                 "Predicted_dG": result.get("dg_bind"),
                 "Predicted_Kd_nM": result.get("kd_nm"),
+                "receptor_chains": ",".join(receptor_chains),
+                "ligand_chains": ",".join(ligand_chains),
+                "num_atoms": result.get("num_atoms"),
+                "iterations": result.get("iterations"),
                 "success": True
             }
             
@@ -965,8 +982,9 @@ def affinity(self, payload):
                 logger.error(f"[ERROR] Failed to generate comparison table: {e}", exc_info=True)
                 raise
 
-            # --- Create output CSV ---
+            # --- Create output CSV (sorted by Case) ---
             output_csv = temp_path / "affinity_comparison.csv"
+            comparison_df = comparison_df.sort_values(by='Case').reset_index(drop=True)
             comparison_df.to_csv(output_csv, index=False)
 
             # --- Generate and emit summary message ---

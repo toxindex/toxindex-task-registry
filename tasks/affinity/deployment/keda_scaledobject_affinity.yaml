@@ -28,15 +28,14 @@ spec:
   # Polling interval - how often KEDA checks the queue
   pollingInterval: 15  # seconds
 
-  # Cooldown period before scaling to zero after queue is empty
+  # Cooldown period before scaling down after queue is empty
   cooldownPeriod: 300  # 5 minutes - gives time for any follow-up tasks
 
-  # Idle replica count (scale to this when no triggers are active)
-  idleReplicaCount: 1  # Keep 1 warm to avoid cold start (~2-5 min GPU provisioning)
-
-  # Min/max replicas when active
-  minReplicaCount: 1   # At least 1 when there are tasks
-  maxReplicaCount: 10  # Match HPA max (A100s are expensive)
+  # Min/max replicas
+  # Note: idleReplicaCount removed - it must be < minReplicaCount (for scale-to-zero)
+  # Since we want 1 warm pod always, we just set minReplicaCount: 1
+  minReplicaCount: 1   # Always keep at least 1 warm
+  maxReplicaCount: 10  # Max pods (L4 GPUs)
 
   # Advanced scaling behavior
   advanced:

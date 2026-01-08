@@ -809,6 +809,8 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
         "e_complex": e_complex.value_in_unit(unit.kilocalories_per_mole),
         "e_receptor": e_receptor.value_in_unit(unit.kilocalories_per_mole),
         "e_ligand": e_ligand.value_in_unit(unit.kilocalories_per_mole),
+        "num_atoms": num_atoms,
+        "iterations": effective_max_iterations,
     }
 
 
@@ -856,7 +858,10 @@ def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligan
             modeller.addHydrogens(forcefield, pH=7.0)
         except Exception:
             pass
-    
+
+    # Track number of atoms for metadata
+    num_atoms = len(list(modeller.topology.atoms()))
+
     def create_sim(modeller_obj):
         system = forcefield.createSystem(modeller_obj.topology,
                                          nonbondedMethod=app.NoCutoff,
@@ -1069,12 +1074,14 @@ def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligan
             "n_snapshots": int(n_snapshots),
             "n_successful_snapshots": int(n_successful),
             "n_failed_snapshots": int(failed_snapshots),
-            "fallback_single_point": False
+            "fallback_single_point": False,
+            "num_atoms": num_atoms,
+            "iterations": max_iterations,
         }
     else:
         # Fallback result
         calculation_failed = (avg_dg is None) or np.isnan(avg_dg) or np.isinf(avg_dg)
-        
+
         return {
             "dg_bind": float(avg_dg) if avg_dg is not None and not calculation_failed else None,
             "kd_nm": float(kd_nm) if kd_nm is not None and not calculation_failed else None,
@@ -1084,7 +1091,9 @@ def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligan
             "n_failed_snapshots": int(failed_snapshots),
             "fallback_single_point": True,
             "fallback_baseline_mmgbsa": bool(used_baseline_fallback),
-            "calculation_failed": bool(calculation_failed)
+            "calculation_failed": bool(calculation_failed),
+            "num_atoms": num_atoms,
+            "iterations": max_iterations,
         }
 
 
@@ -1135,6 +1144,9 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
             modeller.addHydrogens(forcefield, pH=7.0)
         except Exception:
             pass
+
+    # Track number of atoms for metadata
+    num_atoms = len(list(modeller.topology.atoms()))
 
     def create_sim(modeller_obj, name):
         system = forcefield.createSystem(modeller_obj.topology,
@@ -1223,6 +1235,8 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
         "e_complex": e_complex.value_in_unit(unit.kilocalories_per_mole),
         "e_receptor": e_receptor.value_in_unit(unit.kilocalories_per_mole),
         "e_ligand": e_ligand.value_in_unit(unit.kilocalories_per_mole),
+        "num_atoms": num_atoms,
+        "iterations": max_iterations,
     }
 
 
