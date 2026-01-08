@@ -1,0 +1,37 @@
+# Virtual environments
+.venv/
+affinity_cuda_env/
+
+# Debugging and test files
+affinity/debugging/
+*.log
+test_output.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed in container)
+*.md
+!README.md
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Local development
+.python-version
+.env
+.env.local

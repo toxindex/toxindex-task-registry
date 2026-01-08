@@ -149,23 +149,25 @@ def get_processed_pdb(complex_pdb_path: str, ph: float = 7.0,
     return fixer.topology, fixer.positions
 
 
-def calculate_max_iterations(num_atoms: int, tolerance_kj_mol: float = 0.001, 
-                            user_specified: Optional[int] = None) -> int:
+def calculate_max_iterations(num_atoms: int, tolerance_kj_mol: float = 0.001,
+                            user_specified: Optional[int] = None,
+                            max_cap: int = 100000) -> int:
     """
     Calculate appropriate max iterations for energy minimization based on system size.
-    
+
     Rules:
     - Base: 1 iteration per atom (minimum 1000)
     - For very strict tolerance (0.001 kJ/mol): multiply by 7
     - For strict tolerance (0.01 kJ/mol): multiply by 3
     - For moderate tolerance (0.1 kJ/mol): multiply by 2
-    - Safety limit: 20000 iterations maximum
-    
+    - Safety limit: max_cap iterations (default 100,000)
+
     Args:
         num_atoms: Number of atoms in system
         tolerance_kj_mol: Tolerance in kJ/mol
         user_specified: If provided, use this value (but ensure minimum)
-    
+        max_cap: Maximum iterations cap (default 100,000)
+
     Returns:
         Recommended max iterations
     """
@@ -178,12 +180,12 @@ def calculate_max_iterations(num_atoms: int, tolerance_kj_mol: float = 0.001,
             minimum = base * 2  # At least 2x for strict
         else:
             minimum = base  # At least base for moderate
-        
-        return max(user_specified, minimum)
-    
+
+        return min(max(user_specified, minimum), max_cap)
+
     # Calculate based on system size
     base_iterations = max(1000, num_atoms)
-    
+
     # Adjust for tolerance strictness
     if tolerance_kj_mol <= 0.001:
         # Very strict: need 5-10x more iterations (use 7 as middle ground)
@@ -197,11 +199,11 @@ def calculate_max_iterations(num_atoms: int, tolerance_kj_mol: float = 0.001,
     else:
         # Loose: base iterations
         multiplier = 1
-    
+
     calculated = base_iterations * multiplier
-    
+
     # Safety limit to prevent excessive computation
-    return min(calculated, 20000)
+    return min(calculated, max_cap)
 
 
 def normalize_coordinates(positions, precision: int = 6):
@@ -517,7 +519,7 @@ def get_platform_name() -> str:
 
 
 def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligand_chains: List[str],
-                       max_iterations: int = 1000, skip_fixing: bool = False,
+                       max_iterations: Optional[int] = None, skip_fixing: bool = False,
                        platform_name: Optional[str] = None, temperature: float = BODY_TEMPERATURE) -> Dict:
     """
     Run baseline MM/GBSA calculation (single-trajectory method).
@@ -620,48 +622,35 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
     # VerletIntegrator is already fully deterministic (no random number generation)
     integrator = openmm.VerletIntegrator(2.0*unit.femtoseconds)
 
-    try:
-        platform = openmm.Platform.getPlatformByName(platform_name)
+    # REQUIRE CUDA with double precision for deterministic minimization
+    # Per OpenMM docs: only double-precision CUDA guarantees deterministic results
+    if platform_name != "CUDA":
+        raise RuntimeError(
+            f"Platform '{platform_name}' not supported for deterministic minimization. "
+            f"Only CUDA with double precision is supported. "
+            f"Set platform_name='CUDA' or OPENMM_PLATFORM=CUDA environment variable."
+        )
 
-        # Set CUDA precision for fast execution
-        if platform_name == "CUDA":
-            # Use 'mixed' precision for ~2-3x speedup
-            # Removed DeterministicForces for faster parallel GPU execution (~1.5x faster)
-            # Note: Results may have small variations (<0.1 kcal/mol) but much faster
-            try:
-                platform.setPropertyDefaultValue('CudaPrecision', 'mixed')
-                # Explicitly set device index for consistency
-                platform.setPropertyDefaultValue('CudaDeviceIndex', '0')
-                print(f"  Using OpenMM Platform: {platform.getName()} (precision: mixed, fast mode)")
-            except Exception as e:
-                try:
-                    platform.setPropertyDefaultValue('CudaPrecision', 'mixed')
-                    print(f"  Using OpenMM Platform: {platform.getName()} (precision: mixed)")
-                except Exception:
-                    print(f"  Using OpenMM Platform: {platform.getName()} (default precision)")
-        else:
-            print(f"  Using OpenMM Platform: {platform.getName()}")
-        
+    try:
+        platform = openmm.Platform.getPlatformByName("CUDA")
+        # Use 'double' precision for deterministic minimization
+        # Per OpenMM docs: "double-precision CUDA will result in deterministic simulations"
+        # Mixed precision is faster but NOT deterministic
+        platform.setPropertyDefaultValue('CudaPrecision', 'double')
+        # Explicitly set device index for consistency
+        platform.setPropertyDefaultValue('CudaDeviceIndex', '0')
+        print(f"  Using OpenMM Platform: CUDA (precision: double, deterministic mode)")
+
         simulation = app.Simulation(modeller.topology, system, integrator, platform)
     except Exception as e:
-        # Platform not available, try to get best available platform
+        # Do NOT fall back to other platforms - they are not deterministic
         available = get_available_platforms()
-        if available:
-            fallback_platform = available[0]  # Use first available
-            print(f"  Warning: Platform '{platform_name}' not available (Error: {e})")
-            print(f"  Available platforms: {', '.join(available)}")
-            print(f"  Falling back to: {fallback_platform}")
-            try:
-                platform = openmm.Platform.getPlatformByName(fallback_platform)
-                simulation = app.Simulation(modeller.topology, system, integrator, platform)
-                print(f"  Using OpenMM Platform: {platform.getName()}")
-            except Exception:
-                # Last resort: use default
-                print(f"  Warning: Could not set platform, using default")
-                simulation = app.Simulation(modeller.topology, system, integrator)
-        else:
-            print(f"  Warning: Could not set platform {platform_name}, using default. Error: {e}")
-            simulation = app.Simulation(modeller.topology, system, integrator)
+        raise RuntimeError(
+            f"CUDA platform required but failed to initialize: {e}\n"
+            f"Available platforms: {', '.join(available) if available else 'none'}\n"
+            f"Deterministic minimization requires CUDA with double precision. "
+            f"Please ensure CUDA is available and properly configured."
+        )
     
     # Set positions - VerletIntegrator is deterministic (no stochastic terms)
     # For deterministic behavior, ensure:
@@ -688,27 +677,75 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
         user_specified=max_iterations
     )
 
-    print(f"  Minimizing complex ({num_atoms:,} atoms, tolerance={tolerance_kj_mol} kJ/mol, max {effective_max_iterations:,} iterations)...")
-    # Check convergence by comparing energy before and after minimization
+    # Minimization with retry logic for convergence
+    # Retry multipliers: 1x, 2.5x, 5x of initial iterations (capped at 100,000)
+    retry_multipliers = [1.0, 2.5, 5.0]
+    max_retries = len(retry_multipliers)
+    convergence_threshold = 0.01  # kcal/mol
+
     state_before = simulation.context.getState(getEnergy=True)
     e_before = state_before.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
 
-    # CRITICAL: Use LocalEnergyMinimizer directly for more control over determinism
-    # This bypasses Python's minimizeEnergy() which may have non-deterministic behavior
-    # Import the C++ LocalEnergyMinimizer for direct access
-    try:
-        from openmm import LocalEnergyMinimizer
-        # Use the C++ minimizer directly with strict convergence
-        LocalEnergyMinimizer.minimize(simulation.context, tolerance, effective_max_iterations)
-    except (ImportError, AttributeError):
-        # Fallback to standard minimization if LocalEnergyMinimizer not available
-        simulation.minimizeEnergy(maxIterations=effective_max_iterations, tolerance=tolerance)
+    converged = False
+    energy_fluctuation = None
+    total_iterations_used = 0
 
-    # Verify minimization converged
-    state_after = simulation.context.getState(getEnergy=True)
-    e_after = state_after.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-    energy_change = e_after - e_before
-    print(f"  Energy change: {e_before:.2f} -> {e_after:.2f} kcal/mol (Δ = {energy_change:.2f})")
+    for retry_idx, multiplier in enumerate(retry_multipliers):
+        current_iterations = min(int(effective_max_iterations * multiplier), 100000)
+        attempt_num = retry_idx + 1
+
+        if retry_idx == 0:
+            print(f"  Minimizing complex ({num_atoms:,} atoms, tolerance={tolerance_kj_mol} kJ/mol, max {current_iterations:,} iterations)...")
+        else:
+            print(f"  Retry {retry_idx}/{max_retries-1}: Increasing to {current_iterations:,} iterations...")
+
+        # CRITICAL: Use LocalEnergyMinimizer directly for more control over determinism
+        try:
+            from openmm import LocalEnergyMinimizer
+            LocalEnergyMinimizer.minimize(simulation.context, tolerance, current_iterations)
+        except (ImportError, AttributeError):
+            simulation.minimizeEnergy(maxIterations=current_iterations, tolerance=tolerance)
+
+        total_iterations_used += current_iterations
+
+        # Get energy after this round
+        state_after = simulation.context.getState(getEnergy=True)
+        e_after = state_after.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+        # Check convergence by running a few more iterations
+        convergence_test_iterations = 100
+        try:
+            from openmm import LocalEnergyMinimizer
+            LocalEnergyMinimizer.minimize(simulation.context, tolerance, convergence_test_iterations)
+        except (ImportError, AttributeError):
+            simulation.minimizeEnergy(maxIterations=convergence_test_iterations, tolerance=tolerance)
+
+        state_convergence_test = simulation.context.getState(getEnergy=True)
+        e_convergence_test = state_convergence_test.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        energy_fluctuation = abs(e_convergence_test - e_after)
+
+        converged = energy_fluctuation < convergence_threshold
+
+        if converged:
+            print(f"  Convergence: YES (fluctuation={energy_fluctuation:.6f} kcal/mol < {convergence_threshold} threshold)")
+            break
+        else:
+            print(f"  Convergence: NO (fluctuation={energy_fluctuation:.4f} kcal/mol >= {convergence_threshold} threshold)")
+            if retry_idx < max_retries - 1:
+                print(f"  Will retry with more iterations...")
+
+    # Update effective_max_iterations to reflect total used
+    effective_max_iterations = total_iterations_used
+
+    # Final energy change report
+    state_final = simulation.context.getState(getEnergy=True)
+    e_final = state_final.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+    energy_change = e_final - e_before
+    print(f"  Energy change: {e_before:.2f} -> {e_final:.2f} kcal/mol (Δ = {energy_change:.2f})")
+    print(f"  Total iterations used: {total_iterations_used:,}")
+
+    if not converged:
+        print(f"  WARNING: Did not converge after {max_retries} attempts with {total_iterations_used:,} total iterations")
 
     if abs(energy_change) > 1000:  # Large energy change suggests issues
         print(f"  WARNING: Large energy change during minimization: {energy_change:.2f} kcal/mol")
@@ -811,11 +848,16 @@ def run_mmgbsa_baseline(complex_pdb_path: str, receptor_chains: List[str], ligan
         "e_ligand": e_ligand.value_in_unit(unit.kilocalories_per_mole),
         "num_atoms": num_atoms,
         "iterations": effective_max_iterations,
+        "converged": converged,
+        "tolerance": tolerance_kj_mol,
+        "energy_fluctuation": energy_fluctuation,
+        "energy_before": e_before,
+        "energy_after": e_final,
     }
 
 
 def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligand_chains: List[str],
-                       max_iterations: int = 100, skip_fixing: bool = False,
+                       max_iterations: Optional[int] = None, skip_fixing: bool = False,
                        platform_name: Optional[str] = None,
                        md_steps: int = 5000, snapshot_interval: int = 500,
                        temperature: float = ROOM_TEMPERATURE) -> Dict:
@@ -832,7 +874,15 @@ def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligan
     """
     if platform_name is None:
         platform_name = get_platform_name()
-    
+
+    # REQUIRE CUDA with double precision for deterministic minimization
+    if platform_name != "CUDA":
+        raise RuntimeError(
+            f"Platform '{platform_name}' not supported for deterministic minimization. "
+            f"Only CUDA with double precision is supported. "
+            f"Set platform_name='CUDA' or OPENMM_PLATFORM=CUDA environment variable."
+        )
+
     print(f"Processing {os.path.basename(complex_pdb_path)} (Ensemble MM/GBSA)...")
 
     # 1. Fix PDB - Use GCS-cached processed structure for cross-pod determinism
@@ -863,15 +913,24 @@ def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligan
     num_atoms = len(list(modeller.topology.atoms()))
 
     def create_sim(modeller_obj):
+        """Create simulation with CUDA double precision for deterministic minimization."""
         system = forcefield.createSystem(modeller_obj.topology,
                                          nonbondedMethod=app.NoCutoff,
                                          constraints=app.HBonds)
         integrator = openmm.LangevinIntegrator(temperature*unit.kelvin, 1.0/unit.picosecond, 2.0*unit.femtoseconds)
         try:
-            platform = openmm.Platform.getPlatformByName(platform_name)
+            platform = openmm.Platform.getPlatformByName("CUDA")
+            # Use double precision for deterministic minimization
+            platform.setPropertyDefaultValue('CudaPrecision', 'double')
+            platform.setPropertyDefaultValue('CudaDeviceIndex', '0')
             sim = app.Simulation(modeller_obj.topology, system, integrator, platform)
-        except Exception:
-            sim = app.Simulation(modeller_obj.topology, system, integrator)
+        except Exception as e:
+            available = get_available_platforms()
+            raise RuntimeError(
+                f"CUDA platform required but failed to initialize: {e}\n"
+                f"Available platforms: {', '.join(available) if available else 'none'}\n"
+                f"Deterministic minimization requires CUDA with double precision."
+            )
         return sim
     
     # Complex Simulation
@@ -906,11 +965,77 @@ def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligan
                 atom_idx += 1
     
     # 3. Minimize
-    print(f"  Minimizing complex (max {max_iterations} iterations)...")
     # Use strict tolerance for more consistent convergence
     tolerance = 0.1 * unit.kilojoule_per_mole
-    complex_sim.minimizeEnergy(maxIterations=max_iterations, tolerance=tolerance)
-    
+    tolerance_kj_mol = 0.1
+
+    # Calculate appropriate max iterations based on system size
+    effective_max_iterations = calculate_max_iterations(
+        num_atoms,
+        tolerance_kj_mol=tolerance_kj_mol,
+        user_specified=max_iterations
+    )
+
+    # Minimization with retry logic for convergence
+    # Retry multipliers: 1x, 2.5x, 5x of initial iterations (capped at 100,000)
+    retry_multipliers = [1.0, 2.5, 5.0]
+    max_retries = len(retry_multipliers)
+    convergence_threshold = 0.01  # kcal/mol
+
+    state_before = complex_sim.context.getState(getEnergy=True)
+    e_before = state_before.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+    converged = False
+    energy_fluctuation = None
+    total_iterations_used = 0
+
+    for retry_idx, multiplier in enumerate(retry_multipliers):
+        current_iterations = min(int(effective_max_iterations * multiplier), 100000)
+
+        if retry_idx == 0:
+            print(f"  Minimizing complex ({num_atoms:,} atoms, tolerance={tolerance_kj_mol} kJ/mol, max {current_iterations:,} iterations)...")
+        else:
+            print(f"  Retry {retry_idx}/{max_retries-1}: Increasing to {current_iterations:,} iterations...")
+
+        complex_sim.minimizeEnergy(maxIterations=current_iterations, tolerance=tolerance)
+        total_iterations_used += current_iterations
+
+        # Get energy after this round
+        state_after = complex_sim.context.getState(getEnergy=True)
+        e_after = state_after.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+        # Check convergence by running a few more iterations
+        convergence_test_iterations = 100
+        complex_sim.minimizeEnergy(maxIterations=convergence_test_iterations, tolerance=tolerance)
+        state_convergence_test = complex_sim.context.getState(getEnergy=True)
+        e_convergence_test = state_convergence_test.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        energy_fluctuation = abs(e_convergence_test - e_after)
+
+        converged = energy_fluctuation < convergence_threshold
+
+        if converged:
+            print(f"  Convergence: YES (fluctuation={energy_fluctuation:.6f} kcal/mol < {convergence_threshold} threshold)")
+            break
+        else:
+            print(f"  Convergence: NO (fluctuation={energy_fluctuation:.4f} kcal/mol >= {convergence_threshold} threshold)")
+            if retry_idx < max_retries - 1:
+                print(f"  Will retry with more iterations...")
+
+    # Update effective_max_iterations to reflect total used
+    effective_max_iterations = total_iterations_used
+
+    # Final energy report
+    state_final = complex_sim.context.getState(getEnergy=True)
+    e_final = state_final.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+    print(f"  Energy change: {e_before:.2f} -> {e_final:.2f} kcal/mol")
+    print(f"  Total iterations used: {total_iterations_used:,}")
+
+    if not converged:
+        print(f"  WARNING: Did not converge after {max_retries} attempts")
+
+    # Use final energy as e_after for return value
+    e_after = e_final
+
     # Store minimized state for fallback
     minimized_state = complex_sim.context.getState(getEnergy=True, getPositions=True)
     minimized_positions = minimized_state.getPositions(asNumpy=True)
@@ -1076,7 +1201,12 @@ def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligan
             "n_failed_snapshots": int(failed_snapshots),
             "fallback_single_point": False,
             "num_atoms": num_atoms,
-            "iterations": max_iterations,
+            "iterations": effective_max_iterations,
+            "converged": converged,
+            "tolerance": tolerance_kj_mol,
+            "energy_fluctuation": energy_fluctuation,
+            "energy_before": e_before,
+            "energy_after": e_after,
         }
     else:
         # Fallback result
@@ -1093,12 +1223,17 @@ def run_mmgbsa_ensemble(complex_pdb_path: str, receptor_chains: List[str], ligan
             "fallback_baseline_mmgbsa": bool(used_baseline_fallback),
             "calculation_failed": bool(calculation_failed),
             "num_atoms": num_atoms,
-            "iterations": max_iterations,
+            "iterations": effective_max_iterations,
+            "converged": converged,
+            "tolerance": tolerance_kj_mol,
+            "energy_fluctuation": energy_fluctuation,
+            "energy_before": e_before,
+            "energy_after": e_after,
         }
 
 
 def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[str], ligand_chains: List[str],
-                                  max_iterations: int = 100, skip_fixing: bool = False,
+                                  max_iterations: Optional[int] = None, skip_fixing: bool = False,
                                   platform_name: Optional[str] = None, temperature: float = ROOM_TEMPERATURE) -> Dict:
     """
     Run variable dielectric MM/GBSA calculation.
@@ -1118,7 +1253,15 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
     """
     if platform_name is None:
         platform_name = get_platform_name()
-    
+
+    # REQUIRE CUDA with double precision for deterministic minimization
+    if platform_name != "CUDA":
+        raise RuntimeError(
+            f"Platform '{platform_name}' not supported for deterministic minimization. "
+            f"Only CUDA with double precision is supported. "
+            f"Set platform_name='CUDA' or OPENMM_PLATFORM=CUDA environment variable."
+        )
+
     print(f"Processing {os.path.basename(complex_pdb_path)} (Variable Dielectric MM/GBSA)...")
 
     # 1. Fix PDB - Use GCS-cached processed structure for cross-pod determinism
@@ -1149,10 +1292,11 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
     num_atoms = len(list(modeller.topology.atoms()))
 
     def create_sim(modeller_obj, name):
+        """Create simulation with CUDA double precision for deterministic minimization."""
         system = forcefield.createSystem(modeller_obj.topology,
                                          nonbondedMethod=app.NoCutoff,
                                          constraints=app.HBonds)
-        
+
         # Modify GBSAOBCForce to use higher internal dielectric
         for force in system.getForces():
             if isinstance(force, openmm.GBSAOBCForce):
@@ -1162,10 +1306,18 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
         # Use VerletIntegrator for deterministic behavior (no stochastic terms)
         integrator = openmm.VerletIntegrator(2.0*unit.femtoseconds)
         try:
-            platform = openmm.Platform.getPlatformByName(platform_name)
+            platform = openmm.Platform.getPlatformByName("CUDA")
+            # Use double precision for deterministic minimization
+            platform.setPropertyDefaultValue('CudaPrecision', 'double')
+            platform.setPropertyDefaultValue('CudaDeviceIndex', '0')
             sim = app.Simulation(modeller_obj.topology, system, integrator, platform)
-        except Exception:
-            sim = app.Simulation(modeller_obj.topology, system, integrator)
+        except Exception as e:
+            available = get_available_platforms()
+            raise RuntimeError(
+                f"CUDA platform required but failed to initialize: {e}\n"
+                f"Available platforms: {', '.join(available) if available else 'none'}\n"
+                f"Deterministic minimization requires CUDA with double precision."
+            )
         return sim
     
     # Complex Simulation
@@ -1199,12 +1351,67 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
                     lig_indices.append(atom_idx)
                 atom_idx += 1
     
-    # Minimize
-    print(f"  Minimizing complex (max {max_iterations} iterations)...")
+    # Minimize with retry logic for convergence
     # Use strict tolerance for more consistent convergence
     tolerance = 0.1 * unit.kilojoule_per_mole
-    complex_sim.minimizeEnergy(maxIterations=max_iterations, tolerance=tolerance)
-    
+    tolerance_kj_mol = 0.1
+
+    # Calculate appropriate max iterations based on system size
+    effective_max_iterations = calculate_max_iterations(
+        num_atoms,
+        tolerance_kj_mol=tolerance_kj_mol,
+        user_specified=max_iterations
+    )
+
+    # Retry logic: try with progressively more iterations if convergence fails
+    retry_multipliers = [1.0, 2.5, 5.0]
+    max_retries = len(retry_multipliers)
+    convergence_threshold = 0.01  # kcal/mol
+
+    # Get energy before minimization
+    state_before = complex_sim.context.getState(getEnergy=True)
+    e_before = state_before.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+    converged = False
+    energy_fluctuation = None
+    total_iterations_used = 0
+
+    for retry_idx, multiplier in enumerate(retry_multipliers):
+        current_iterations = min(int(effective_max_iterations * multiplier), 100000)
+
+        if retry_idx == 0:
+            print(f"  Minimizing complex ({num_atoms:,} atoms, tolerance={tolerance_kj_mol} kJ/mol, max {current_iterations:,} iterations)...")
+        else:
+            print(f"  Retry {retry_idx}/{max_retries-1}: Increasing to {current_iterations:,} iterations...")
+
+        # Minimize
+        complex_sim.minimizeEnergy(maxIterations=current_iterations, tolerance=tolerance)
+        total_iterations_used += current_iterations
+
+        # Get energy after this minimization round
+        state_after = complex_sim.context.getState(getEnergy=True)
+        e_after = state_after.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+        # Check convergence by running a few more iterations
+        convergence_test_iterations = 100
+        complex_sim.minimizeEnergy(maxIterations=convergence_test_iterations, tolerance=tolerance)
+        state_convergence_test = complex_sim.context.getState(getEnergy=True)
+        e_convergence_test = state_convergence_test.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        energy_fluctuation = abs(e_convergence_test - e_after)
+
+        converged = energy_fluctuation < convergence_threshold
+
+        if converged:
+            print(f"  Convergence: YES (fluctuation={energy_fluctuation:.6f} kcal/mol)")
+            break
+        else:
+            print(f"  Convergence: NO (fluctuation={energy_fluctuation:.4f} kcal/mol)")
+            if retry_idx < max_retries - 1:
+                print(f"  Will retry with more iterations...")
+
+    print(f"  Energy change: {e_before:.2f} -> {e_after:.2f} kcal/mol")
+    print(f"  Total iterations used: {total_iterations_used:,}")
+
     # Get State
     state = complex_sim.context.getState(getEnergy=True, getPositions=True)
     e_complex = state.getPotentialEnergy()
@@ -1236,7 +1443,12 @@ def run_mmgbsa_variable_dielectric(complex_pdb_path: str, receptor_chains: List[
         "e_receptor": e_receptor.value_in_unit(unit.kilocalories_per_mole),
         "e_ligand": e_ligand.value_in_unit(unit.kilocalories_per_mole),
         "num_atoms": num_atoms,
-        "iterations": max_iterations,
+        "iterations": total_iterations_used,
+        "converged": converged,
+        "tolerance": tolerance_kj_mol,
+        "energy_fluctuation": energy_fluctuation,
+        "energy_before": e_before,
+        "energy_after": e_after,
     }
 
 

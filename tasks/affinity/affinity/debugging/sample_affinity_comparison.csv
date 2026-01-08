@@ -1,0 +1,3 @@
+Case,receptor_chains,ligand_chains,num_atoms,iterations,converged,tolerance,energy_fluctuation,energy_before,energy_after,baseline_dG,baseline_Kd_nM,baseline_rank
+1S78,A,B,7599,15198,False,0.1,0.025,91828.24,-31035.28,-65.123,1.500e-35,2
+2DD8,"H,L",S,9322,18644,True,0.1,0.003242,7586.67,-17455.83,-81.642,2.922e-49,1

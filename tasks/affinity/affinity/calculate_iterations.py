@@ -7,27 +7,28 @@ For our three example PDB files:
 - 2FJG_complex.pdb: 4781 atoms
 """
 
-def calculate_max_iterations(num_atoms: int, tolerance_kj_mol: float = 0.001) -> int:
+def calculate_max_iterations(num_atoms: int, tolerance_kj_mol: float = 0.001, max_cap: int = 100000) -> int:
     """
     Calculate appropriate max iterations based on system size and tolerance.
-    
+
     Rules:
     - Base: 1 iteration per atom (minimum 1000)
     - For very strict tolerance (0.001 kJ/mol): multiply by 5-10
     - For strict tolerance (0.01 kJ/mol): multiply by 3
     - For moderate tolerance (0.1 kJ/mol): multiply by 2
-    - Safety limit: 20000 iterations maximum
-    
+    - Safety limit: max_cap iterations (default 100,000)
+
     Args:
         num_atoms: Number of atoms in system
         tolerance_kj_mol: Tolerance in kJ/mol
-    
+        max_cap: Maximum iterations cap (default 100,000)
+
     Returns:
         Recommended max iterations
     """
     # Base iterations: ~1 iteration per atom, minimum 1000
     base_iterations = max(1000, num_atoms)
-    
+
     # Adjust for tolerance strictness
     if tolerance_kj_mol <= 0.001:
         # Very strict: need 5-10x more iterations
@@ -41,12 +42,12 @@ def calculate_max_iterations(num_atoms: int, tolerance_kj_mol: float = 0.001) ->
     else:
         # Loose: base iterations
         multiplier = 1
-    
+
     calculated = base_iterations * multiplier
-    
+
     # Safety limit to prevent excessive computation
-    max_iterations = min(calculated, 20000)
-    
+    max_iterations = min(calculated, max_cap)
+
     return max_iterations
 
 

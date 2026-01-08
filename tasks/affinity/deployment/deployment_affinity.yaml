@@ -27,7 +27,8 @@ spec:
         image: us-docker.pkg.dev/toxindex/toxindex-backend/affinity:latest
         # -c 1: Process 1 task at a time (GPU bottleneck)
         # --prefetch-multiplier=1: Only prefetch 1 task, so KEDA sees queue and scales
-        command: ["python", "-m", "celery", "-A", "affinity.celery_worker_affinity", "worker", "--loglevel=info", "-Q", "affinity", "-c", "1", "--prefetch-multiplier=1"]
+        # -Q affinity_gpu: Only process GPU subtasks (main tasks go to 'affinity' queue on CPU workers)
+        command: ["python", "-m", "celery", "-A", "affinity.celery_worker_affinity", "worker", "--loglevel=info", "-E", "-Q", "affinity_gpu", "-c", "1", "--prefetch-multiplier=1"]
         envFrom:
         - secretRef:
             name: backend-secrets

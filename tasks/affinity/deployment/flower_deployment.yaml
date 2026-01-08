@@ -1,0 +1,81 @@
+# Celery Flower Deployment with Prometheus Metrics
+# Provides monitoring of Celery workers and exposes metrics for KEDA scaling
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-flower
+  namespace: toxindex-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: celery-flower
+  template:
+    metadata:
+      labels:
+        app: celery-flower
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5555"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: flower
+        image: mher/flower:2.0
+        command:
+          - celery
+          - --broker=redis://$(REDIS_HOST):$(REDIS_PORT)/0
+          - flower
+          - --port=5555
+          - --prometheus-endpoint=/metrics
+        env:
+        - name: REDIS_HOST
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: REDIS_PORT
+        - name: FLOWER_UNAUTHENTICATED_API
+          value: "true"
+        ports:
+        - containerPort: 5555
+          name: http
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /healthcheck
+            port: 5555
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthcheck
+            port: 5555
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: celery-flower
+  namespace: toxindex-app
+  labels:
+    app: celery-flower
+spec:
+  selector:
+    app: celery-flower
+  ports:
+  - port: 5555
+    targetPort: 5555
+    name: http
+  type: ClusterIP

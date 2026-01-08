@@ -436,7 +436,7 @@ def generate_comparison_table(results_by_method: dict, groundtruth_df: Optional[
     comparison_df = pd.DataFrame({'Case': list(all_cases)})
 
     # Extract metadata columns (same for all methods, use first available)
-    metadata_cols = ['receptor_chains', 'ligand_chains', 'num_atoms', 'iterations']
+    metadata_cols = ['receptor_chains', 'ligand_chains', 'num_atoms', 'iterations', 'converged', 'tolerance', 'energy_fluctuation', 'energy_before', 'energy_after']
     for col in metadata_cols:
         for df in results_by_method.values():
             if col in df.columns:
@@ -534,8 +534,8 @@ def generate_comparison_table(results_by_method: dict, groundtruth_df: Optional[
     return comparison_df
 
 
-@celery.task(bind=True, queue='affinity')
-def affinity_single_pdb(self, pdb_file_id: str, metadata_dict: dict, 
+@celery.task(bind=True, queue='affinity_gpu')
+def affinity_single_pdb(self, pdb_file_id: str, metadata_dict: dict,
                         method: str, temperature: float, task_id: str):
     """
     Process a single PDB file - called as subtask for parallel execution.
@@ -598,6 +598,11 @@ def affinity_single_pdb(self, pdb_file_id: str, metadata_dict: dict,
                 "ligand_chains": ",".join(ligand_chains),
                 "num_atoms": result.get("num_atoms"),
                 "iterations": result.get("iterations"),
+                "converged": result.get("converged"),
+                "tolerance": result.get("tolerance"),
+                "energy_fluctuation": result.get("energy_fluctuation"),
+                "energy_before": result.get("energy_before"),
+                "energy_after": result.get("energy_after"),
                 "success": True
             }
             
@@ -644,7 +649,16 @@ def affinity_aggregate_method(self, subtask_results: List[Dict], method: str, ta
             method_results.append({
                 "Case": result["Case"],
                 "Predicted_dG": result["Predicted_dG"],
-                "Predicted_Kd_nM": result["Predicted_Kd_nM"]
+                "Predicted_Kd_nM": result["Predicted_Kd_nM"],
+                "receptor_chains": result.get("receptor_chains"),
+                "ligand_chains": result.get("ligand_chains"),
+                "num_atoms": result.get("num_atoms"),
+                "iterations": result.get("iterations"),
+                "converged": result.get("converged"),
+                "tolerance": result.get("tolerance"),
+                "energy_fluctuation": result.get("energy_fluctuation"),
+                "energy_before": result.get("energy_before"),
+                "energy_after": result.get("energy_after"),
             })
         else:
             case_id = result.get("Case", "unknown") if result else "unknown"

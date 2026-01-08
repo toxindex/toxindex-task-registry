@@ -29,50 +29,48 @@ spec:
   pollingInterval: 15  # seconds
 
   # Cooldown period before scaling down after queue is empty
-  cooldownPeriod: 300  # 5 minutes - gives time for any follow-up tasks
+  cooldownPeriod: 60  # 1 minute - Prometheus monitors active tasks so we can scale down quickly
 
   # Min/max replicas
   # Note: idleReplicaCount removed - it must be < minReplicaCount (for scale-to-zero)
   # Since we want 1 warm pod always, we just set minReplicaCount: 1
   minReplicaCount: 1   # Always keep at least 1 warm
-  maxReplicaCount: 10  # Max pods (L4 GPUs)
+  maxReplicaCount: 16  # Max pods (L4 GPUs)
 
   # Advanced scaling behavior
   advanced:
     horizontalPodAutoscalerConfig:
       behavior:
         scaleDown:
-          stabilizationWindowSeconds: 60
+          # Prometheus trigger monitors active tasks, so we can scale down faster
+          stabilizationWindowSeconds: 60  # 1 minute
           policies:
-          - type: Percent
-            value: 50
-            periodSeconds: 30
+          - type: Pods
+            value: 4           # Scale down 4 pods at a time
+            periodSeconds: 30  # Every 30 seconds
         scaleUp:
           stabilizationWindowSeconds: 0
           policies:
           - type: Pods
-            value: 2
+            value: 4           # Scale up aggressively (4 pods at a time)
             periodSeconds: 15
 
   triggers:
-  # Watch the Celery queue in Redis
+  # Trigger 1: Watch pending GPU subtasks in Redis queue
   - type: redis
     metadata:
-      # Redis connection details
-      address: "10.238.5.54:6379"  # Your Redis host:port
-
-      # Celery uses Redis lists for task queues
-      # Queue name format: celery (default) or custom queue name
-      listName: "affinity"  # The Celery queue name for affinity tasks
-      listLength: "1"       # Scale up when there's at least 1 task in queue
-
-      # Optional: Use activationListLength to set threshold for 0→1 scaling
-      # activationListLength: "1"  # Minimum queue length to activate scaling from 0
-
-      # Database number (Celery default is 0)
+      address: "10.238.5.54:6379"
+      listName: "affinity_gpu"    # Celery queue for GPU subtasks only
+      listLength: "1"             # Scale when >= 1 pending task
       databaseIndex: "0"
 
-    # Authentication reference (if Redis requires password)
-    # Uncomment if your Redis requires authentication
-    # authenticationRef:
-    #   name: keda-redis-auth
+  # Trigger 2: Watch active tasks via Prometheus (scraping Flower metrics)
+  # This prevents scale-down while workers are processing tasks
+  # Architecture: Flower -> Prometheus (scrapes /metrics) -> KEDA (queries /api/v1/query)
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.toxindex-app.svc.cluster.local:9090
+      metricName: celery_active_tasks
+      # Sum active tasks across GPU affinity workers only (exclude affinity-cpu orchestrators)
+      query: sum(flower_worker_number_of_currently_executing_tasks{worker=~".*affinity.*",worker!~".*affinity-cpu.*"}) or vector(0)
+      threshold: "1"              # Keep pods alive when >= 1 active task
